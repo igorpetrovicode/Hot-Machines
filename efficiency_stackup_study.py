@@ -14,7 +14,7 @@ against the ABB datasheet's reported total losses (P₁ − P₂) at five
 load points (NL, 25%, 50%, 75%, 100%).
 
 All thermal-fit parameters below are the fleet averages across the
-8-turbine Machine Study fleet. They are hardcoded here to keep this
+10-turbine Machine Study fleet. They are hardcoded here to keep this
 script standalone. See provenance notes in PARAMETER_PROVENANCE below.
 
 ═════════════════════════════════════════════════════════════════════
