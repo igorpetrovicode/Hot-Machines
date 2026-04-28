@@ -47,33 +47,33 @@ $$
 which is integrated by trapezoidal exponential update to give the conditional mean (one-step prediction):
 
 $$
-\mu_k \;=\; \mathbb{E}[T_{k+1} | T_k] \;=\; e^{a \Delta t_k} \left(T_{k} + \tfrac{\Delta t_k}{2} b_{k}\right) + \tfrac{\Delta t_k}{2} b_{k+1}
+\mu_k = \mathbb{E}[T_{k+1} | T_k] = e^{a \Delta t_k} \left(T_{k} + \tfrac{\Delta t_k}{2} b_{k}\right) + \tfrac{\Delta t_k}{2} b_{k+1}
 $$
 
 The SDE defines a **transition density** for each step. Because the noise is additive Gaussian, each transition is Gaussian with mean $\mu_k$ and variance $Q_k$ from the discretised stochastic integral. By the Itô isometry:
 
 $$
-Q_k \;=\; \left(\frac{\sigma_w}{C}\right)^2 \int_0^{\Delta t_k} e^{2a(\Delta t_k - s)}\,ds
-\;=\; \left(\frac{\sigma_w}{C}\right)^2 \frac{e^{2a\Delta t_k}-1}{2a}
-\;\approx\; \left(\frac{\sigma_w}{C}\right)^2 \Delta t_k
+Q_k = \left(\frac{\sigma_w}{C}\right)^2 \int_0^{\Delta t_k} e^{2a(\Delta t_k - s)}\,ds
+= \left(\frac{\sigma_w}{C}\right)^2 \frac{e^{2a\Delta t_k}-1}{2a}
+\approx \left(\frac{\sigma_w}{C}\right)^2 \Delta t_k
 $$
 
 where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for our fleet). The transition density is therefore:
 
 $$
-T_{k+1} \,|\, T_k \;\sim\; \mathcal{N}\!\left(\mu_k,\;\; Q_k\right)
+T_{k+1} \,|\, T_k \sim \mathcal{N}\!\left(\mu_k, Q_k\right)
 $$
 
 The **log-likelihood** of the observed temperature record factorises by the Markov property:
 
 $$
--\ln\mathcal{L}(\theta,\sigma_w) \;=\; \frac{1}{2}\sum_k \left[\ln Q_k \;+\; \frac{(T_{k+1} - \mu_k)^2}{Q_k}\right]
+-\ln\mathcal{L}(\theta,\sigma_w) = \frac{1}{2}\sum_k \left[\ln Q_k + \frac{(T_{k+1} - \mu_k)^2}{Q_k}\right]
 $$
 
 Substituting $Q_k = (\sigma_w/C)^2 \Delta t_k$ and writing $\lambda = (\sigma_w/C)^2$:
 
 $$
--\ln\mathcal{L} \;=\; \frac{N{-}1}{2}\ln\lambda \;+\; \frac{1}{2\lambda}\underbrace{\sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}}_{S(\theta)} \;+\; \text{const}
+-\ln\mathcal{L} = \frac{N{-}1}{2}\ln\lambda + \frac{1}{2\lambda}\underbrace{\sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}}_{S(\theta)} + \text{const}
 $$
 
 where the constant $\tfrac{1}{2}\sum_k \ln\Delta t_k$ depends only on the sampling times. Differentiating with respect to $\lambda$ and setting to zero:
@@ -87,7 +87,7 @@ $$
 Substituting back into the log-likelihood, the $\lambda$-dependent terms become $(N{-}1)\ln S(\theta)/2 + \text{const}$, so maximising the **concentrated (profile) log-likelihood** over $\theta$ reduces to:
 
 $$
-\min_\theta \;S(\theta) \;=\; \min_\theta \;\sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}
+\min_\theta \, S(\theta) = \min_\theta \sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}
 $$
 
 This is a weighted least-squares problem. The weight $1/\Delta t_k$ arises because longer time steps accumulate more Brownian variance, so their prediction errors should be penalised less. In practice, we define $\nu_k = (T_{k+1} - \mu_k)/\Gamma_k$ where $\Gamma_k = (e^{a\Delta t_k}-1)/a \approx \Delta t_k$, and the cost vector becomes $\nu_k \sqrt{\Delta t_k}$ — each component having equal variance $(\sigma_w/C)^2$.
