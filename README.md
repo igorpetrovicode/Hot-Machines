@@ -61,7 +61,7 @@ $$
 where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for our fleet). The transition density is therefore:
 
 $$
-T_{k+1} \,|\, T_k \sim \mathcal{N}\!\left(\mu_k, Q_k\right)
+T_{k+1} \,|\, T_k \sim \mathcal{N}\left(\mu_k, Q_k\right)
 $$
 
 The **log-likelihood** of the observed temperature record factorises by the Markov property:
