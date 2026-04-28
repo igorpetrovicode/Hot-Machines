@@ -53,12 +53,12 @@ $$
 The SDE defines a **transition density** for each step. Because the noise is additive Gaussian, each transition is Gaussian with mean $\mu_k$ and variance $Q_k$ from the discretised stochastic integral. By the Itô isometry:
 
 $$
-Q_k = \left(\frac{\sigma_w}{C}\right)^2 \int_0^{\Delta t_k} e^{2a(\Delta t_k - s)}\,ds
+Q_k = \left(\frac{\sigma_w}{C}\right)^2 \int_0^{\Delta t_k} e^{2a(\Delta t_k - s)} ds
 = \left(\frac{\sigma_w}{C}\right)^2 \frac{e^{2a\Delta t_k}-1}{2a}
 \approx \left(\frac{\sigma_w}{C}\right)^2 \Delta t_k
 $$
 
-where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for data analyzed). The transition density is therefore:
+where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for our fleet). The transition density is therefore:
 
 $$
 T_{k+1} \,|\, T_k \sim \mathcal{N}\left(\mu_k, Q_k\right)
