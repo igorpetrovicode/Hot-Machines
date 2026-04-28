@@ -58,7 +58,7 @@ Q_k = \left(\frac{\sigma_w}{C}\right)^2 \int_0^{\Delta t_k} e^{2a(\Delta t_k - s
 \approx \left(\frac{\sigma_w}{C}\right)^2 \Delta t_k
 $$
 
-where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for our fleet). The transition density is therefore:
+where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for data analyzed). The transition density is therefore:
 
 $$
 T_{k+1} \,|\, T_k \sim \mathcal{N}\left(\mu_k, Q_k\right)
@@ -99,12 +99,7 @@ $$
 $$
 
 Parameters $R_{t,\mathrm{on}}, R_{t,\mathrm{off}}, P_0, C_{eq}$ are fit
-per machine by nonlinear least squares on $\nu_k \sqrt{\Delta t_k}$, giving fleet-mean:
-
-- $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4% (entire dataset), $\sim$1% (per machine)
-- $P_0 = 331$ W $\pm$ 18% (entire dataset), $\sim$6% (per machine)
-- $C_{eq} = 43939$ J/K $\pm$ 24% (entire dataset), $\sim$2% (per machine)
-- Fleet-average RMSE = 3.45 °C
+per machine by nonlinear least squares on $\nu_k \sqrt{\Delta t_k}$, giving fleet-mean $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4%, $P_0 = 331$ W $\pm$ 18%, $C_{eq} = 43939$ J/K $\pm$ 24%, and fleet-average RMSE of 3.45 °C.
 
 ### Machine reactance from ABB Type Test (Form 4 derivation)
 
@@ -335,18 +330,17 @@ Pipeline outputs:
 
 **Fleet parameters (10-turbine mean ± CV):**
 
-| Parameter | Mean | Fleet CV | Per-machine SE |
-| --- | --- | --- | --- |
-| $R_{t,\mathrm{on}}$ | $0.0484\ \mathrm{K/W}$ | 4% | ~1% |
-| $R_{t,\mathrm{off}}$ | $0.105\ \mathrm{K/W}$&hairsp;† | 30%&hairsp;† | ~5–40%&hairsp;† |
-| $P_0$ | $331\ \mathrm{W}$ | 18% | ~6% |
-| $C_{eq}$ | $43{,}939\ \mathrm{J/K}$ | 24% | ~2% |
-| $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% | — |
-| RMSE | $3.45\ \mathrm{°C}$ | — | — |
+| Parameter | Mean | CV |
+| --- | --- | --- |
+| $R_{t,\mathrm{on}}$ | $0.0484\ \mathrm{K/W}$ | 4% |
+| $R_{t,\mathrm{off}}$ | $0.105\ \mathrm{K/W}$&hairsp;† | 30%&hairsp;† |
+| $P_0$ | $331\ \mathrm{W}$ | 18% |
+| $C_{eq}$ | $43{,}939\ \mathrm{J/K}$ | 24% |
+| $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% |
+| RMSE | $3.45\ \mathrm{°C}$ | — |
 
 † $R_{t,\mathrm{off}}$ excludes T2, T3 and T4 (bound-saturated fits); full-fleet
-CV is 81%. Per-machine SE ranges from ~4% (well-constrained) to >100%
-(bound-saturated).
+CV is 81%.
 
 **ABB datasheet constants:**
 
