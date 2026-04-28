@@ -87,7 +87,7 @@ $$
 Substituting back into the log-likelihood, the $\lambda$-dependent terms become $(N{-}1)\ln S(\theta)/2 + \text{const}$, so maximising the **concentrated (profile) log-likelihood** over $\theta$ reduces to:
 
 $$
-\min_\theta \, S(\theta) = \min_\theta \sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}
+\min_\theta S(\theta) = \min_\theta \sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}
 $$
 
 This is a weighted least-squares problem. The weight $1/\Delta t_k$ arises because longer time steps accumulate more Brownian variance, so their prediction errors should be penalised less. In practice, we define $\nu_k = (T_{k+1} - \mu_k)/\Gamma_k$ where $\Gamma_k = (e^{a\Delta t_k}-1)/a \approx \Delta t_k$, and the cost vector becomes $\nu_k \sqrt{\Delta t_k}$ — each component having equal variance $(\sigma_w/C)^2$.
