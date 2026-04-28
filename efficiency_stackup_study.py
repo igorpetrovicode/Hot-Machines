@@ -22,8 +22,8 @@ PARAMETER_PROVENANCE
 ═════════════════════════════════════════════════════════════════════
 
 1C1R THERMAL-FIT PARAMETERS (fleet mean across 10 machines):
-    Rt_on_fleet = 0.04822    # °C/W
-    P0_fleet    = 333.9      # W
+    Rt_on_fleet = 0.04828    # °C/W
+    P0_fleet    = 336.1      # W
   Source: run_fleet.py --plots
           (invokes turbine_thermal_pipeline_thevenin.fit_thevenin()
           on each machine; fleet means computed from the per-machine
@@ -73,8 +73,8 @@ import matplotlib.pyplot as plt
 # ═════════════════════════════════════════════════════════════════════
 
 # Fleet-mean thermal-fit parameters (from run_fleet.py)
-Rt_on_fleet = 0.04822    # °C/W
-P0_fleet    = 333.9      # W
+Rt_on_fleet = 0.04828    # °C/W
+P0_fleet    = 336.1      # W
 
 # ABB Type Test Report constants
 R_phase_20  = 0.09806    # Ω, per phase (delta), at 20°C reference

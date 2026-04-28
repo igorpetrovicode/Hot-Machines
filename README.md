@@ -19,7 +19,7 @@ the value ABB reports via the datasheet's own residual-loss method.
 ## 1. Thermal model (1C1R, Thévenin form)
 
 The winding temperature $T$ is modelled as a single thermal node with lumped
-capacitance $C$ and a switched thermal resistance $R_t$ to ambient:
+capacitance $C$, switched thermal resistance $R_t$ to ambient and system noise $\sigma_w$:
 
 $$
 C \frac{dT}{dt} = I^{2} R_{dc}(T) + P_{0} - \frac{T - T_{amb}}{R_t} + \sigma_w \frac{dB}{dt}
@@ -44,15 +44,62 @@ a = \frac{I^{2} R_{dc,20} \alpha - 1/R_t}{C}
 b = \frac{I^{2} R_{dc,20} (1 - \alpha T_{ref}) + P_{0} + T_{amb}/R_t}{C}
 $$
 
-which is integrated by trapezoidal exponential update:
+which is integrated by trapezoidal exponential update to give the conditional mean (one-step prediction):
 
 $$
-T_{k+1} = e^{a \Delta t_k} \left(T_{k} + \tfrac{\Delta t_k}{2} b_{k}\right) + \tfrac{\Delta t_k}{2} b_{k+1}
+\mu_k \;=\; \mathbb{E}[T_{k+1} | T_k] \;=\; e^{a \Delta t_k} \left(T_{k} + \tfrac{\Delta t_k}{2} b_{k}\right) + \tfrac{\Delta t_k}{2} b_{k+1}
+$$
+
+The SDE defines a **transition density** for each step. Because the noise is additive Gaussian, each transition is Gaussian with mean $\mu_k$ and variance $Q_k$ from the discretised stochastic integral. By the Itô isometry:
+
+$$
+Q_k \;=\; \left(\frac{\sigma_w}{C}\right)^2 \int_0^{\Delta t_k} e^{2a(\Delta t_k - s)}\,ds
+\;=\; \left(\frac{\sigma_w}{C}\right)^2 \frac{e^{2a\Delta t_k}-1}{2a}
+\;\approx\; \left(\frac{\sigma_w}{C}\right)^2 \Delta t_k
+$$
+
+where the last approximation holds for $|a|\Delta t \ll 1$ (typically $\sim 0.008$ for our fleet). The transition density is therefore:
+
+$$
+T_{k+1} \,|\, T_k \;\sim\; \mathcal{N}\!\left(\mu_k,\;\; Q_k\right)
+$$
+
+The **log-likelihood** of the observed temperature record factorises by the Markov property:
+
+$$
+-\ln\mathcal{L}(\theta,\sigma_w) \;=\; \frac{1}{2}\sum_k \left[\ln Q_k \;+\; \frac{(T_{k+1} - \mu_k)^2}{Q_k}\right]
+$$
+
+Substituting $Q_k = (\sigma_w/C)^2 \Delta t_k$ and writing $\lambda = (\sigma_w/C)^2$:
+
+$$
+-\ln\mathcal{L} \;=\; \frac{N{-}1}{2}\ln\lambda \;+\; \frac{1}{2\lambda}\underbrace{\sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}}_{S(\theta)} \;+\; \text{const}
+$$
+
+where the constant $\tfrac{1}{2}\sum_k \ln\Delta t_k$ depends only on the sampling times. Differentiating with respect to $\lambda$ and setting to zero:
+
+$$
+\frac{N{-}1}{2\lambda} - \frac{S(\theta)}{2\lambda^2} = 0
+\qquad\Longrightarrow\qquad
+\hat\lambda(\theta) = \frac{S(\theta)}{N{-}1}
+$$
+
+Substituting back into the log-likelihood, the $\lambda$-dependent terms become $(N{-}1)\ln S(\theta)/2 + \text{const}$, so maximising the **concentrated (profile) log-likelihood** over $\theta$ reduces to:
+
+$$
+\min_\theta \;S(\theta) \;=\; \min_\theta \;\sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}
+$$
+
+This is a weighted least-squares problem. The weight $1/\Delta t_k$ arises because longer time steps accumulate more Brownian variance, so their prediction errors should be penalised less. In practice, we define $\nu_k = (T_{k+1} - \mu_k)/\Gamma_k$ where $\Gamma_k = (e^{a\Delta t_k}-1)/a \approx \Delta t_k$, and the cost vector becomes $\nu_k \sqrt{\Delta t_k}$ — each component having equal variance $(\sigma_w/C)^2$.
+
+After convergence, $\sigma_w$ is recovered in closed form:
+
+$$
+\hat\sigma_w = C\sqrt{\frac{S(\theta^*)}{N{-}1}} = C\sqrt{\frac{1}{N{-}1}\sum_k \frac{(T_{k+1} - \mu_k)^2}{\Delta t_k}}
 $$
 
 Parameters $R_{t,\mathrm{on}}, R_{t,\mathrm{off}}, P_0, C_{eq}$ are fit
-per machine by nonlinear least squares on whitened innovations $\nu_k = (e_{k+1} - e^{a\Delta t_k}e_k)/\Gamma_k$ with
-$\Gamma_k = (e^{a\Delta t_k}-1)/a$, giving fleet-mean $R_{t,\mathrm{on}} = 0.0482$ °C/W $\pm$ 4%, $P_0 = 334$ W $\pm$ 12%, $C_{eq} = 47060$ J/K $\pm$ 19%, and fleet-average RMSE of 2.80 °C.
+per machine by nonlinear least squares on $\nu_k \sqrt{\Delta t_k}$, giving fleet-mean $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4%, $P_0 = 331$ W $\pm$ 18%, $C_{eq} = 43939$ J/K $\pm$ 24%, and fleet-average RMSE of 3.45 °C.
 
 ### Machine reactance from ABB Type Test (Form 4 derivation)
 
@@ -225,7 +272,7 @@ canonical form:
 $$
 P_{stray}(P_1) = P_{stray,\mathrm{rated}} \cdot \left(\frac{P_1}{P_{1,\mathrm{rated}}}\right)^{ 2}
 \qquad
-P_{stray,\mathrm{rated}} = 284\ \mathrm{W}
+P_{stray,\mathrm{rated}} = 283\ \mathrm{W}
 $$
 
 This sits within the IEEE 112 / NEMA MG-1 typical range for IE2 motors and
@@ -240,7 +287,7 @@ loss"* in the datasheet footnote.
 | 15.30 kW | 14.13 kW | 208 W  | 54 W  | 902 W | 20 W  | **1184 W** | $15.30{-}14.13 = 1170$ W     | **−14** |
 | 29.52 kW | 27.94 kW | 393 W  | 199 W | 902 W | 73 W  | **1567 W** | $29.52{-}27.94 = 1580$ W     | **+13** |
 | 44.04 kW | 41.79 kW | 741 W  | 444 W | 902 W | 162 W | **2249 W** | $44.04{-}41.79 = 2250$ W     | **+1**  |
-| 58.25 kW | 55.00 kW | 1291 W | 776 W | 902 W | 284 W | **3253 W** | $58.25{-}55.00 = 3250$ W     | **−3**  |
+| 58.25 kW | 55.00 kW | 1292 W | 776 W | 902 W | 283 W | **3253 W** | $58.25{-}55.00 = 3250$ W     | **−3**  |
 
 **Mean $|\Delta| = 8\ \mathrm{W}$, or $0.01\%$ of rated input power** — at
 or below ABB datasheet rounding precision. The budget is complete to within
@@ -285,15 +332,15 @@ Pipeline outputs:
 
 | Parameter | Mean | CV |
 | --- | --- | --- |
-| $R_{t,\mathrm{on}}$ | $0.0482\ \mathrm{K/W}$ | 4% |
-| $R_{t,\mathrm{off}}$ | $0.104\ \mathrm{K/W}$&hairsp;† | 35%&hairsp;† |
-| $P_0$ | $334\ \mathrm{W}$ | 12% |
-| $C_{eq}$ | $47{,}060\ \mathrm{J/K}$ | 19% |
-| $\tau_\mathrm{on}$ | $37.7\ \mathrm{min}$ | 19% |
-| RMSE | $2.80\ \mathrm{°C}$ | — |
+| $R_{t,\mathrm{on}}$ | $0.0484\ \mathrm{K/W}$ | 4% |
+| $R_{t,\mathrm{off}}$ | $0.105\ \mathrm{K/W}$&hairsp;† | 30%&hairsp;† |
+| $P_0$ | $331\ \mathrm{W}$ | 18% |
+| $C_{eq}$ | $43{,}939\ \mathrm{J/K}$ | 24% |
+| $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% |
+| RMSE | $3.45\ \mathrm{°C}$ | — |
 
-† $R_{t,\mathrm{off}}$ excludes T3 and T4 (bound-saturated fits); full-fleet
-CV is 97%.
+† $R_{t,\mathrm{off}}$ excludes T2, T3 and T4 (bound-saturated fits); full-fleet
+CV is 81%.
 
 **ABB datasheet constants:**
 

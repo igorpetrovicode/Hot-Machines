@@ -2,13 +2,13 @@
 Wind turbine generator thermal identification — Thévenin (1C1R) variant.
 
 A single-node thermal model. Treats the generator as a single
-thermal mass with a single cooling resistance. No hidden states, no gauge
-symmetries, no need for material constants from a datasheet — every parameter
-is freely fitted from temperature observations alone.
+thermal mass with a single cooling resistance and additive system noise σ_w.
+Parameters are estimated by maximum likelihood on the Gaussian transition
+density of the discretised SDE, with σ_w concentrated out analytically.
 
 Trade-off: gives up the ability to model winding/iron temperature separately,
-but produces tighter cross-fleet parameter consistency and lower fit RMSE on
-average. Recommended as the default model for protection-coordination work.
+but produces tighter cross-fleet parameter consistency. Recommended as the
+default model for protection-coordination work.
 
 Usage:
     python turbine_thermal_pipeline_thevenin.py <path_to_csv>
@@ -184,8 +184,8 @@ def compute_form4(data):
 #     T[k+1] = exp(a_k·dt)·(T[k] + dt/2·b_k) + dt/2·b_{k+1}
 #
 # This is O(Δt³) local and more accurate than ZOH when b varies between samples.
-# Innovation extraction (for stochastic analysis) still uses ZOH for clean
-# per-step invertibility — see extract_innovation_thevenin below.
+# The same trapezoidal update computes the conditional mean μ_k = E[T_{k+1}|T_k]
+# inside fit_thevenin, where it serves as the one-step MLE prediction.
 
 
 def _coeffs(i, Rt_on, Rt_off, P0, C_eq, gen_on, I2, Tnac):
@@ -244,13 +244,55 @@ def fit_thevenin(N, dt, Tw, Tnac, I2, gen_on, gap):
     """
     Fit the four Thévenin parameters: (R_t_on, R_t_off, P0, C_eq).
 
+    Maximum-likelihood estimation via the transition density of the SDE.
+    The model defines  p(T_{k+1} | T_k, θ)  as Gaussian with:
+
+        mean:      μ_k = F_k · T_k  +  (trapezoidal forcing)
+        variance:  Q_k = (σ_w/C)² · Δt_k
+
+    where F_k = exp(a_k · Δt_k).  σ_w is concentrated out analytically,
+    reducing the problem to min_θ Σ (T_{k+1} - μ_k)² / Δt_k.
+
+    In practice, we define ν_k = (T_{k+1} - μ_k) / Γ_k where
+    Γ_k = (exp(a·Δt_k) - 1)/a ≈ Δt_k, and the cost vector becomes
+    ν_k √Δt_k — each component having equal variance (σ_w/C)².
+
+    Each prediction μ_k is computed from the *measurement* T_k,
+    not from a free-running model trajectory — this is the direct
+    evaluation of the transition density mean.
+
     Returns dict with parameters, predicted temperature, weights, RMSE,
     standard errors, and parameter correlation matrix.
     """
+    # Pre-compute the gap-valid mask for innovations (length N-1)
+    valid = ~gap[:N - 1]
+    # Variance normalisation: Var(ν_k) = (σ_w/C)²/Δt_k, so multiplying
+    # by √Δt_k gives equal-variance residuals for the LS cost.
+    sqrt_dt = np.sqrt(dt[:N - 1])
+
     def resid(p):
-        T, w = simulate_thevenin(p[0], p[1], p[2], p[3],
-                                  N, dt, Tw, Tnac, I2, gen_on, gap)
-        return w * (T - Tw)
+        Rt_on, Rt_off, P0, C_eq = p
+        nu = np.zeros(N - 1)
+        for i in range(N - 1):
+            if not valid[i]:
+                continue
+            # Transition coefficients at step i
+            a, b_i = _coeffs(i, Rt_on, Rt_off, P0, C_eq,
+                             gen_on, I2, Tnac)
+            _, b_ip1 = _coeffs(min(i + 1, N - 1), Rt_on, Rt_off,
+                               P0, C_eq, gen_on, I2, Tnac)
+            if abs(a) > 1e-15:
+                ea = np.exp(a * dt[i])
+                Gamma = (ea - 1) / a
+            else:
+                ea = 1.0
+                Gamma = dt[i]
+            # One-step prediction from T_meas[i] (trapezoidal)
+            mu = ea * (Tw[i] + 0.5 * dt[i] * b_i) + 0.5 * dt[i] * b_ip1
+            # Innovation
+            if abs(Gamma) > 1e-15:
+                nu[i] = (Tw[i + 1] - mu) / Gamma * sqrt_dt[i]
+        return nu
 
     res = least_squares(
         resid,
@@ -267,7 +309,8 @@ def fit_thevenin(N, dt, Tw, Tnac, I2, gen_on, gap):
     rmse = float(np.sqrt(np.sum((w * (T - Tw))**2) / n_eff))
 
     # Standard errors via Jacobian (ignoring nonlinearity in second order)
-    sigma2 = np.sum(res.fun**2) / max(n_eff - 4, 1)
+    n_nu = int(valid.sum())
+    sigma2 = np.sum(res.fun**2) / max(n_nu - 4, 1)
     try:
         cov = sigma2 * np.linalg.inv(res.jac.T @ res.jac)
         se = np.sqrt(np.diag(cov))
@@ -294,26 +337,33 @@ def fit_thevenin(N, dt, Tw, Tnac, I2, gen_on, gap):
 
 
 # ════════════════════════════════════════════════════════════════════════════
-# STOCHASTIC / INNOVATION ANALYSIS
+# STOCHASTIC / INNOVATION DIAGNOSTICS
 # ════════════════════════════════════════════════════════════════════════════
 #
-# For a 1D system the integrating-factor inversion is straightforward
-# — there's no hidden state to propagate. Given the deterministic
-# residual e[k] = T_meas[k] − T_pred[k] and the closed-form update
+# The SDE defines a Gaussian transition density  T_{k+1} | T_k ~ N(μ_k, Q_k)
+# with  Q_k = (σ_w/C)² Δt_k.  Parameter fitting (in fit_thevenin) maximises
+# the concentrated log-likelihood by minimising  Σ (T_{k+1} - μ_k)² / Δt_k,
+# predicting each step from the measurement T_k.
 #
-#     T[k+1] = T[k]·exp(a·dt) + (b/a)·(exp(a·dt) − 1)
+# After fitting, the innovation ν_k = (T_{k+1} - μ_k) / Γ_k can be extracted
+# from the free-running model trajectory (simulate_thevenin output) via the
+# algebraically equivalent residual-recurrence inversion:
 #
-# the same recurrence applies to the error driven by an innovation ν[k]:
+#     e[k+1] = e[k]·exp(a·dt) + Γ·ν[k]    →    ν[k] = (e[k+1] - e[k]·eᵃᵈᵗ) / Γ
 #
-#     e[k+1] = e[k]·exp(a·dt) + Γ·ν[k]
-#     Γ      = (exp(a·dt) − 1) / a
-#
-# Solving for ν[k] gives the per-step process noise.
+# Under correct model specification, ν_k should be white noise with
+# σ_w = C · std(ν) and zero correlation with the input current.
 
 def extract_innovation_thevenin(Rt_on, Rt_off, P0, C_eq, N, dt, Tw, Tw_pred,
                                  Tnac, I2, gen_on, gap):
     """
-    Recover the innovation sequence from a fitted 1C1R model.
+    Recover the innovation sequence from a fitted 1C1R model (post-fit diagnostic).
+
+    Uses the residual-recurrence inversion e[k+1] = e[k]·eᵃᵈᵗ + Γ·ν[k]
+    on the free-running model trajectory.  This is algebraically equivalent
+    to the one-step prediction error ν_k = (T_{k+1} - μ_k) / Γ_k computed
+    inside fit_thevenin, but operates on the simulate_thevenin output
+    for use in histograms and ACF diagnostics.
 
     Returns
     -------
@@ -343,7 +393,20 @@ def extract_innovation_thevenin(Rt_on, Rt_off, P0, C_eq, N, dt, Tw, Tw_pred,
 
 
 def innovation_diagnostics(nu, valid, gen_on, I2, max_lag=10):
-    """White-noise diagnostics on the innovation: σ_w, ACF, corr(I), σ ratio."""
+    """
+    White-noise diagnostics on the innovation sequence.
+
+    Returns σ_w = std(ν) (proportional to the SDE diffusion coefficient),
+    ACF at lags 1..max_lag (should be near zero for a correctly specified
+    model), corr(ν, I) (should be near zero if the model captures the
+    current-dependent heating), and the on/off σ ratio.
+
+    Note: the ML estimator of σ_w from the concentrated likelihood is
+    C·√(S(θ*)/(N-1)) where S = Σ(T_{k+1}-μ_k)²/Δt_k.  For constant
+    Δt this equals C·std(ν)·√Δt.  The value reported here is std(ν)
+    without the C or √Δt factors — it is the innovation-domain noise
+    density, not the physical σ_w.
+    """
     nuv = nu[valid]
     if len(nuv) < max_lag + 2:
         return {"sigma_w": np.nan, "acf": [], "corr_I": np.nan,
@@ -600,10 +663,11 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
 
     # Layout: 3×2 grid reading top-to-bottom like a report.
     #   Row 0 (top):    Damage curves (split full+zoom) | Model vs Measured
-    #   Row 1 (middle): Winding temperature time series  | Residual time series
+    #   Row 1 (middle): Winding temperature time series  | Parameter corner plot
     #   Row 2 (bottom): Innovation histogram             | Model equations
     #
     # The top-left cell is split into two side-by-side sub-axes.
+    # The middle-right cell is split into a 3×3 corner grid.
     from matplotlib.gridspec import GridSpec, GridSpecFromSubplotSpec
     fig = plt.figure(figsize=(15, 12))
     gs = GridSpec(3, 2, figure=fig)
@@ -615,7 +679,13 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
     ax_dmg_zoom = fig.add_subplot(sub[0, 1])
     ax_scatter = fig.add_subplot(gs[0, 1])
     ax_ts = fig.add_subplot(gs[1, 0])
-    ax_resid = fig.add_subplot(gs[1, 1])
+
+    # Middle-right: 3×3 corner plot for parameter correlations
+    corner_gs = GridSpecFromSubplotSpec(3, 3, subplot_spec=gs[1, 1],
+                                        wspace=0.05, hspace=0.05)
+    ax_corner = [[fig.add_subplot(corner_gs[r, c])
+                   for c in range(3)] for r in range(3)]
+
     ax_hist = fig.add_subplot(gs[2, 0])
     ax_eqns = fig.add_subplot(gs[2, 1])
 
@@ -788,13 +858,9 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
         ax.axvline(0, color='k', lw=0.5, alpha=0.5)
         ax.set_xlim(-x_span, x_span)
 
-    ax.set_xlabel(r'Innovation $\nu_k$  (realization of $\sigma_w\,dB/dt$)  [°C/s]')
+    ax.set_xlabel(r'$\nu_k$ [°C/s]')
     ax.set_ylabel('Density')
-    ax.set_title(r'Innovation histogram:  '
-                 rf"$\sigma_w = \mathrm{{std}}(\nu) = {diag['sigma_w']:.4f}"
-                 rf"\ (\pm{{\sim}}1\%)$,  "
-                 rf"corr(I) = {diag['corr_I']:+.3f}",
-                 fontweight='bold')
+    ax.set_title('System Noise Density', fontweight='bold')
     ax.legend(fontsize=8, loc='upper right'); ax.grid(True, alpha=0.3)
 
     # ── 4. Model equations ──
@@ -867,31 +933,23 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
         (0.17, r'$\bf{Fit\ quality}$', 12),
         (0.08, rf'$RMSE = {fit["rmse"]:.3f}°C \qquad'
                rf' R^2 = {r2:.4f} \qquad'
-               rf' \sigma_w = {diag["sigma_w"]:.5f}$', 10),
+               rf' \sigma(T_w) = {sigma_Tw:.2f}°C$', 10),
     ]
     for y, txt, fs in params:
         ax.text(0.05, y, txt, transform=ax.transAxes, fontsize=fs,
                 va='center', ha='left', family='serif')
 
-    # Footer: ABB datasheet derivation and sample counts.
-    # ABB measured line-to-line resistance at 25.6°C test ambient.
-    # The pipeline uses the connection-agnostic effective resistance
-    # R_dc = (3/2)·R_LL, corrected to the 20°C reference.
-    T_ABB = 25.6  # ABB test ambient [°C]
-    R_LL_20 = (2.0/3.0) * R_PHASE_20
-    R_LL_abb = R_LL_20 * (1.0 + ALPHA_CU * (T_ABB - T_REF))
     ax.text(0.05, 0.00,
-            rf'$R_{{dc,20}} = \frac{{3}}{{2}}R_{{LL}} = '
-            rf'{R_PHASE_20:.5f}\ \Omega\ \ '
-            rf'(\mathrm{{ABB\ R_{{LL}}@25.6°C}} = '
-            rf'{R_LL_abb:.5f}\ \Omega,\ \Delta)$',
+            rf'$\sigma_w = {diag["sigma_w"]:.5f}\ \pm \sim 1\%\ \ '
+            rf'[°C/s] \qquad '
+            rf'corr(\nu, I) = {diag["corr_I"]:+.3f}$',
             transform=ax.transAxes, fontsize=11, va='center', ha='left',
             family='serif', color='black')
     ax.text(0.05, -0.05, rf'$N_{{eff}} = {fit["n_eff"]}'
             rf'\qquad N = {N}$',
             transform=ax.transAxes, fontsize=11, va='center', ha='left',
             family='serif', color='black')
-    ax.set_title('Model parameters', fontweight='bold')
+    ax.set_title('Model Parameters', fontweight='bold')
 
     # ── 5. Winding temperature time series ──
     ax = ax_ts
@@ -914,23 +972,94 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
             gap_labeled = True
 
     ax.set_xlabel('Time [h]'); ax.set_ylabel('Tw [°C]')
-    ax.set_title(f"Winding temperature fit | Rt_on={fit['Rt_on']:.4f}, "
-                 f"P₀={fit['P0']:.0f}W, C_eq={fit['C_eq']:.0f}",
-                 fontweight='bold')
-    ax.plot([], [], ' ', label=f'σ(Tw) = {sigma_Tw:.2f} °C')
+    ax.set_title('Winding Temperature Fit', fontweight='bold')
     ax.legend(fontsize=9, loc='upper right')
     ax.grid(True, alpha=0.3)
 
-    # ── 6. Residual time series ──
-    ax = ax_resid
-    e = Tw - Tw_pred
-    e[~mv] = np.nan
-    ax.plot(t_hrs, e, 'C0', lw=0.4, alpha=0.6)
-    ax.axhline(0, color='k', lw=0.5)
-    ax.fill_between(t_hrs, -10, 10, where=~data["gen_on"], alpha=0.10, color='C2')
-    ax.set_xlabel('Time [h]'); ax.set_ylabel('Residual [°C]')
-    ax.set_title('Residual (Measured − Model) °C', fontweight='bold')
-    ax.grid(True, alpha=0.3)
+    # ── 6. Parameter corner plot (Rt_on, P0, C_eq) ──
+    ax_corner[0][1].set_title('Parameter Distribution',
+                              fontweight='bold', fontsize=10)
+    _corner_params = np.array([fit["Rt_on"], fit["P0"], fit["C_eq"]])
+    _corner_se = np.array([fit["se"][0], fit["se"][2], fit["se"][3]])
+    _corner_corr_full = np.array(fit["corr"])
+    _corner_idx = [0, 2, 3]
+    _corner_corr = _corner_corr_full[np.ix_(_corner_idx, _corner_idx)]
+    _corner_labels = [r'$R_{t,on}$', r'$P_0$', r'$C_{eq}$']
+    _corner_units = ['K/W', 'W', 'J/K']
+
+    def _fmt_val(v, idx):
+        if idx == 0: return f'{v:.4f}'
+        return f'{v:.0f}'
+
+    for row in range(3):
+        for col in range(3):
+            ax = ax_corner[row][col]
+            ax.tick_params(labelsize=7, length=2, pad=1)
+
+            if col > row:
+                # Upper triangle: correlation coefficient
+                ax.set_xticks([]); ax.set_yticks([])
+                rho = _corner_corr[row][col]
+                c = 'C3' if rho < 0 else 'C0'
+                ax.text(0.5, 0.55, f'{rho:+.3f}', transform=ax.transAxes,
+                        ha='center', va='center', fontsize=14,
+                        fontweight='bold', color=c)
+                ax.text(0.5, 0.30, f'{_corner_labels[row]} vs {_corner_labels[col]}',
+                        transform=ax.transAxes, ha='center', va='center',
+                        fontsize=7, color='0.5')
+                for spine in ax.spines.values():
+                    spine.set_visible(False)
+
+            elif row == col:
+                # Diagonal: marginal Gaussian
+                m, s = _corner_params[row], _corner_se[row]
+                xp = np.linspace(m - 3.5*s, m + 3.5*s, 200)
+                yp = np.exp(-0.5*((xp - m)/s)**2)
+                ax.fill_between(xp, 0, yp, alpha=0.15, color='C0')
+                ax.plot(xp, yp, 'C0', lw=1.5)
+                ax.axvline(m, color='C0', lw=0.8, ls='--')
+                ax.set_yticks([])
+                ax.set_xlim(m - 3.5*s, m + 3.5*s)
+                ax.set_ylim(0, 1.15)
+                # Label: value ± SE below x-axis
+                ax.set_xlabel(f'{_corner_labels[row]} [{_corner_units[row]}]',
+                              fontsize=7, labelpad=1)
+                ax.set_title(f'{_fmt_val(m, row)} \u00b1 {_fmt_val(s, row)}',
+                             fontsize=7, pad=2, color='0.4')
+                # σ ticks
+                for ns in [-2, -1, 1, 2]:
+                    ax.axvline(m + ns*s, color='0.7', lw=0.4, ls=':')
+
+            else:
+                # Lower triangle: confidence ellipses
+                mX, sX = _corner_params[col], _corner_se[col]
+                mY, sY = _corner_params[row], _corner_se[row]
+                rho = _corner_corr[row][col]
+                theta = np.linspace(0, 2*np.pi, 200)
+                u, v = np.cos(theta), np.sin(theta)
+                for ns, alpha, lw in [(2, 0.06, 0.8), (1, 0.15, 1.2)]:
+                    ex = mX + ns*sX*u
+                    ey = mY + ns*sY*(rho*u + np.sqrt(1 - rho**2)*v)
+                    ax.fill(ex, ey, alpha=alpha, color='C0')
+                    ax.plot(ex, ey, 'C0', lw=lw, alpha=0.7)
+                    # Label the ellipse
+                    li = len(theta)*3//8  # upper-left
+                    ax.text(ex[li], ey[li], f' {ns}\u03c3', fontsize=6,
+                            color='C0', alpha=0.6, va='bottom')
+                ax.plot(mX, mY, 'C0o', ms=3)
+                ax.set_xlim(mX - 3.5*sX, mX + 3.5*sX)
+                ax.set_ylim(mY - 3.5*sY, mY + 3.5*sY)
+                if row == 2:
+                    ax.set_xlabel(f'{_corner_labels[col]} [{_corner_units[col]}]',
+                                  fontsize=7, labelpad=1)
+                else:
+                    ax.set_xticklabels([])
+                if col == 0:
+                    ax.set_ylabel(f'{_corner_labels[row]} [{_corner_units[row]}]',
+                                  fontsize=7, labelpad=1)
+                else:
+                    ax.set_yticklabels([])
+                ax.grid(True, alpha=0.15, lw=0.3)
 
     sup = title if title else f"{label}  —  Machine Study"
     plt.suptitle(sup, fontsize=14,
