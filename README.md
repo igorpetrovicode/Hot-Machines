@@ -101,9 +101,9 @@ $$
 Parameters $R_{t,\mathrm{on}}, R_{t,\mathrm{off}}, P_0, C_{eq}$ are fit
 per machine by nonlinear least squares on $\nu_k \sqrt{\Delta t_k}$, giving fleet-mean:
 
-- $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4% (entire dataset), $\sim$1% (per machine)
-- $P_0 = 331$ W $\pm$ 18% (entire dataset), $\sim$6% (per machine)
-- $C_{eq} = 43939$ J/K $\pm$ 24% (entire dataset), $\sim$2% (per machine)
+- $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4% (entire dataset), ~1% (per machine)
+- $P_0 = 331$ W $\pm$ 18% (entire dataset), ~6% (per machine)
+- $C_{eq} = 43939$ J/K $\pm$ 24% (entire dataset), ~2% (per machine)
 - Fleet-average RMSE = 3.45 °C
 
 ### Machine reactance from ABB Type Test (Form 4 derivation)
