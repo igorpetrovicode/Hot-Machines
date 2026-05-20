@@ -141,17 +141,31 @@ def stator_Cu_at(I_line, T_ss):
     return 3 * I_ph**2 * R1_at(T_ss)
 
 
-def rotor_Cu_at(P1_kW, T_ss):
+# Fraction of the no-load constant-loss lump (P_ifw) that is CORE loss.
+# The air-gap power balance subtracts core loss (pre-air-gap) but NOT
+# friction & windage (post-air-gap mechanical loss). The ABB Type Test
+# Report gives only the no-load total (1.04 kW) and does not separate
+# core from F&W, so this split is not measured here. Typical range for a
+# 4-pole ~55 kW TEFC machine at rated voltage is 0.40–0.65; 0.55 default.
+CORE_FRACTION = 0.55
+
+
+def rotor_Cu_at(P1_kW, P_Cu_s, P_core):
     """
-    Rotor copper loss via slip × P_elec identity.
-    Slip scales linearly with P1 from the rated-point anchor.
-    No temperature correction — the slip identity is already an
-    operating-condition statement (the measured slip reflects whatever
-    rotor temperature obtained at thermal equilibrium during the ABB test).
-    The T_ss argument is unused but retained for API compatibility.
+    Rotor copper loss via the slip identity on the AIR-GAP power:
+
+        P_rCu = s · P_airgap ,   P_airgap = P_1 − P_Cu,s − P_core
+
+    NOT s · P_input. The induction-machine power flow is
+        P_1 → (− stator Cu, − core) → P_airgap → (− rotor Cu = s·P_airgap)
+    so using input power overstates rotor copper by s·(P_Cu,s + P_core).
+    Slip scales linearly with P1 from the rated-point anchor; no winding-
+    temperature correction (the measured slip already reflects the rotor
+    temperature reached at ABB-test thermal equilibrium).
     """
-    s = s_rated * (P1_kW / 58.25)      # linear-in-P1 slip
-    return s * P1_kW * 1000.0          # watts
+    s = s_rated * (P1_kW / 58.25)              # linear-in-P1 slip
+    P_airgap = P1_kW * 1000.0 - P_Cu_s - P_core
+    return s * P_airgap                        # watts
 
 
 # ═════════════════════════════════════════════════════════════════════
@@ -191,7 +205,8 @@ for lbl, P1_kW, P2_kW, I_line in ABB_POINTS:
     else:
         T_ss = solve_Tss(I_line, T_amb_op, Rt_on_fleet, P0_fleet)
         P_Cu_s = stator_Cu_at(I_line, T_ss)
-        P_rCu = rotor_Cu_at(P1_kW, T_ss)
+        P_core = CORE_FRACTION * P_ifw
+        P_rCu = rotor_Cu_at(P1_kW, P_Cu_s, P_core)
         P_pred = P_Cu_s + P_rCu + P_ifw
 
     P_Cu_s_vals.append(P_Cu_s)
@@ -246,7 +261,7 @@ ax.bar(x, P_Cu_s_vals, bar_w, color=c_stator, edgecolor='white',
        label='Stator Cu  =  I²·R_dc(T_ss)   [thermal fit]')
 ax.bar(x, P_rCu_vals, bar_w, bottom=P_Cu_s_vals, color=c_rotor,
        edgecolor='white', linewidth=1.0,
-       label='Rotor Cu  =  s·P_elec   [slip identity]')
+       label='Rotor Cu  =  s·P_airgap   [slip identity]')
 
 bot3 = [a + b for a, b in zip(P_Cu_s_vals, P_rCu_vals)]
 ax.bar(x, [P0_fleet] * len(x), bar_w, bottom=bot3, color=c_ifw_p0,

@@ -155,6 +155,13 @@ def _run_thevenin(fleet, form4, plot_dir=None):
         diag = result["stochastic"]
         I_cont = result["I_continuous_mult"]
         acf1 = diag["acf"][0] if diag["acf"] else float("nan")
+        se = fit.get("se", [float("nan")] * 4)
+        seh = fit.get("se_hac", [float("nan")] * 4)
+        ch = fit.get("corr_hac") or fit.get("corr")
+        # SE inflation factor on C_eq (index 3) and Rt_on (index 0)
+        infl_C = seh[3] / se[3] if se[3] else float("nan")
+        infl_Rt = seh[0] / se[0] if se[0] else float("nan")
+        rt_c = ch[0][3] if ch is not None else float("nan")
         gm = result["data"]["gen_on"] & (result["data"]["P"] > 1)
         I_mean = float(result["I_gen"][gm].mean()) if gm.any() else float("nan")
         rows.append({
@@ -163,6 +170,8 @@ def _run_thevenin(fleet, form4, plot_dir=None):
             "tau_on_min": fit["tau_on"] / 60,
             "I_cont": I_cont if I_cont is not None else float("nan"),
             "I_mean": I_mean,
+            "seC_naive": se[3], "seC_hac": seh[3],
+            "infl_C": infl_C, "infl_Rt": infl_Rt, "rt_c": rt_c,
         })
 
         if plot_dir is not None:
@@ -184,6 +193,19 @@ def _run_thevenin(fleet, form4, plot_dir=None):
 
     mean_rmse = float(np.mean([r["rmse"] for r in rows]))
     print(f"\n  Thévenin mean RMSE: {mean_rmse:.4f} °C")
+
+    print(f"\n  Whiteness-robust uncertainty (Newey-West HAC vs naive):")
+    print(f"  {'Turb':<5} {'ACF(1)':>8} {'C_eq':>8} "
+          f"{'seC_naive':>10} {'seC_HAC':>9} {'inflate':>8} "
+          f"{'corr(Rt,C)':>11}")
+    print("  " + "-" * 64)
+    for r in rows:
+        print(f"  {r['label']:<5} {r['acf1']:>+8.4f} {r['C_eq']:>8.0f} "
+              f"{r['seC_naive']:>10.0f} {r['seC_hac']:>9.0f} "
+              f"{r['infl_C']:>7.2f}x {r['rt_c']:>+11.3f}")
+    med_infl = float(np.nanmedian([r["infl_C"] for r in rows]))
+    print(f"\n  Median C_eq SE inflation under HAC: {med_infl:.2f}x  "
+          f"(naive SEs understate uncertainty by this factor)")
     if plot_dir is not None:
         print(f"  Per-turbine plots written to: {plot_dir}/")
     return rows

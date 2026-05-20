@@ -311,26 +311,97 @@ def fit_thevenin(N, dt, Tw, Tnac, I2, gen_on, gap):
     # Standard errors via Jacobian (ignoring nonlinearity in second order)
     n_nu = int(valid.sum())
     sigma2 = np.sum(res.fun**2) / max(n_nu - 4, 1)
+
+    # Physical diffusion coefficient (concentrated-MLE estimator).
+    # res.fun_k = ν_k·√Δt_k has Var = λ = (σ_w/C)²  [units K²/s], with the
+    # √Δt already baked in (so this is sampling-rate invariant, unlike
+    # std(ν)).  Hence:
+    #   σ_w/C  = √λ̂                [K·s^-1/2]   temperature-domain noise
+    #   σ_w    = C·√λ̂             [W·s^1/2  = J·s^-1/2]   physical SDE σ_w
+    lam_hat        = float(np.sum(res.fun**2) / max(n_nu - 1, 1))
+    sigma_w_over_C = float(np.sqrt(lam_hat))          # degC·s^-1/2
+    sigma_w_phys   = float(C_eq * np.sqrt(lam_hat))   # W·s^1/2
+
+    # SE of σ_w, autocorrelation-robust.  λ̂ = mean(e²) with e = ν√Δt;
+    # Var(λ̂) is inflated by the integrated autocorrelation of the SQUARED
+    # residuals (same misspecification that colours the innovations also
+    # colours their squares).  Newey-West κ on x = e² − λ̂, then delta
+    # method through σ_w/C = √λ̂  (d/dλ = 1/(2√λ)) and σ_w = C·√λ̂.
+    e2 = res.fun[valid] ** 2
+    n_e = e2.size
+    if n_e > 4:
+        xc = e2 - e2.mean()
+        g0 = float(np.mean(xc * xc))
+        L_s = int(np.floor(4.0 * (n_e / 100.0) ** (2.0 / 9.0)))
+        kappa = 1.0
+        for lag in range(1, L_s + 1):
+            gl = float(np.mean(xc[lag:] * xc[:-lag]))
+            kappa += 2.0 * (1.0 - lag / (L_s + 1.0)) * gl / g0 \
+                if g0 > 0 else 0.0
+        var_lam = g0 / n_e * max(kappa, 0.0)
+        se_lam = float(np.sqrt(max(var_lam, 0.0)))
+    else:
+        se_lam = float("nan")
+    se_sigma_w_over_C = se_lam / (2.0 * np.sqrt(lam_hat)) \
+        if lam_hat > 0 else float("nan")
+    se_sigma_w_phys = float(C_eq * se_sigma_w_over_C)
     try:
-        cov = sigma2 * np.linalg.inv(res.jac.T @ res.jac)
+        JtJ_inv = np.linalg.inv(res.jac.T @ res.jac)
+        # --- (a) naive white-residual Gauss-Newton covariance ---
+        cov = sigma2 * JtJ_inv
         se = np.sqrt(np.diag(cov))
         D = np.diag(1.0 / se)
         corr = D @ cov @ D
+
+        # --- (b) HAC (Newey-West) sandwich, robust to colored innovations ---
+        # Moment condition for NLLS is J^T r = 0; per-observation score is
+        # s_i = J_i * r_i (4-vector). Restrict to valid (gap-free) rows so
+        # the lag structure is over genuine consecutive samples.
+        J = res.jac[valid]
+        r = res.fun[valid]
+        S_i = J * r[:, None]                       # (n_nu, 4) score rows
+        n = S_i.shape[0]
+        # Bandwidth: Newey-West fixed rule L = floor(4 (n/100)^(2/9))
+        L = int(np.floor(4.0 * (n / 100.0) ** (2.0 / 9.0))) if n > 4 else 0
+        meat = S_i.T @ S_i                         # Gamma_0
+        for lag in range(1, L + 1):
+            G = S_i[lag:].T @ S_i[:-lag]           # Gamma_lag
+            w_b = 1.0 - lag / (L + 1.0)            # Bartlett weight
+            meat += w_b * (G + G.T)
+        cov_hac = JtJ_inv @ meat @ JtJ_inv
+        se_hac = np.sqrt(np.clip(np.diag(cov_hac), 0, None))
+        if np.all(se_hac > 0):
+            Dh = np.diag(1.0 / se_hac)
+            corr_hac = Dh @ cov_hac @ Dh
+        else:
+            corr_hac = np.full((4, 4), np.nan)
     except np.linalg.LinAlgError:
         se = np.full(4, np.nan)
         corr = np.full((4, 4), np.nan)
+        se_hac = np.full(4, np.nan)
+        corr_hac = np.full((4, 4), np.nan)
+        L = 0
 
     return {
         "Rt_on": Rt_on,
         "Rt_off": Rt_off,
         "P0": P0,
         "C_eq": C_eq,
+        "C": C_eq,
         "tau_on": C_eq * Rt_on,
         "tau_off": C_eq * Rt_off,
         "rmse": rmse,
         "n_eff": n_eff,
+        "sigma_w_phys": sigma_w_phys,
+        "sigma_w_over_C": sigma_w_over_C,
+        "se_sigma_w_phys": se_sigma_w_phys,
+        "se_sigma_w_over_C": se_sigma_w_over_C,
+        "resid_ev": res.fun,
         "se": list(se),
+        "se_hac": list(se_hac),
+        "hac_lag": int(L),
         "corr": corr.tolist(),
+        "corr_hac": corr_hac.tolist(),
         "Tw_pred": T,
         "weights": w,
     }
@@ -601,15 +672,36 @@ def print_summary(result, label="turbine"):
           f" (CV={se[0]/fit['Rt_on']*100:.2f}%)")
     print(f"    Rt_off  = {fit['Rt_off']:.4f} ± {se[1]:.4f} °C/W")
     print(f"    P0      = {fit['P0']:.0f} ± {se[2]:.0f} W")
-    print(f"    C_eq    = {fit['C_eq']:.0f} ± {se[3]:.0f} J/°C"
+    print(f"    C       = {fit['C_eq']:.0f} ± {se[3]:.0f} J/°C"
           f" (CV={se[3]/fit['C_eq']*100:.2f}%)")
     print(f"    τ_on    = {fit['tau_on']:.0f} s ({fit['tau_on']/60:.1f} min)")
     print(f"    τ_off   = {fit['tau_off']:.0f} s ({fit['tau_off']/60:.1f} min)")
     print(f"    RMSE    = {fit['rmse']:.3f} °C")
 
+    seh = fit.get("se_hac", [float('nan')] * 4)
+    corr = fit.get("corr_hac", fit.get("corr"))
+    rt_c_corr = corr[0][3] if corr is not None else float('nan')
+    print(f"\n  Robust SEs (Newey-West HAC, lag={fit.get('hac_lag','?')}) "
+          f"vs naive white-noise SE:")
+    print(f"    Rt_on : ±{se[0]:.4f} (naive)  ->  ±{seh[0]:.4f} (HAC)  "
+          f"[x{seh[0]/se[0]:.2f}]")
+    print(f"    Rt_off: ±{se[1]:.4f} (naive)  ->  ±{seh[1]:.4f} (HAC)  "
+          f"[x{seh[1]/se[1]:.2f}]")
+    print(f"    P0    : ±{se[2]:.0f} (naive)  ->  ±{seh[2]:.0f} (HAC)  "
+          f"[x{seh[2]/se[2]:.2f}]")
+    print(f"    C     : ±{se[3]:.0f} (naive)  ->  ±{seh[3]:.0f} (HAC)  "
+          f"[x{seh[3]/se[3]:.2f}]")
+    print(f"    corr(Rt_on, C) = {rt_c_corr:+.3f}  "
+          f"(identifiability tradeoff)")
+
     print(f"\n  Innovation diagnostics (whiteness check):")
     diag = result["stochastic"]
-    print(f"    σ_w        = {diag['sigma_w']:.4f} °C/s")
+    print(f"    σ_w (physical) = {fit['sigma_w_phys']:.1f} W·s^½   "
+          f"[ = C·√λ̂, sampling-rate invariant ]")
+    print(f"    σ_w/C          = {fit['sigma_w_over_C']:.5f} °C·s^-½ "
+          f"[ temperature-domain noise ]")
+    print(f"    std(ν)         = {diag['sigma_w']:.5f} °C/s        "
+          f"[ innovation-domain only; Δt-dependent ]")
     if diag["acf"]:
         print(f"    ACF(1..5)  = " + ", ".join(f"{a:+.3f}" for a in diag["acf"][:5]))
     print(f"    corr(I)    = {diag['corr_I']:+.3f}")
@@ -797,7 +889,6 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
     ax.set_xlabel('Current [× Ie]')
     ax.set_title('Zoom 1×–1.5×',
                  fontweight='bold', fontsize=10)
-    ax.legend(fontsize=7, loc='upper right')
     ax.grid(True, which='both', alpha=0.3)
     ax.set_xlim(1.0, 1.5)
     ax.set_ylim(1, 100000)
@@ -836,32 +927,75 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
     ax.set_aspect('equal')
 
     # ── 3. Innovation histogram with fitted Gaussian ──
+    # Plot the EQUAL-VARIANCE (whitened) residuals e_k = ν_k·√Δt_k, whose
+    # std is exactly σ_w/C by construction.  This makes the histogram's σ
+    # numerically identical to the σ_w/C reported in the annotation below
+    # (same quantity, same units), instead of std(ν) which differs by √Δt.
     ax = ax_hist
-    nu_valid = nu[valid]
-    if len(nu_valid) > 10:
-        nu_mean = float(np.mean(nu_valid))
-        nu_std = float(np.std(nu_valid))
+    ev = np.asarray(fit["resid_ev"])
+    ev_valid = ev[valid]
+    if len(ev_valid) > 10:
+        ev_mean = float(np.mean(ev_valid))
+        sw_C = float(fit["sigma_w_over_C"])      # = √λ̂, the reported σ_w/C
 
-        n_bins = min(80, max(30, len(nu_valid) // 60))
-        counts, bin_edges, patches = ax.hist(
-            nu_valid, bins=n_bins, density=True, alpha=0.55, color='C0',
-            edgecolor='white', linewidth=0.3,
-            label=f'μ = {nu_mean:.5f}\nσ = {nu_std:.5f}')
+        # Fixed bin count fleet-wide so all per-machine panels have the
+        # same visual resolution. With x_span = 5·sw_C on every machine
+        # this also gives identical bin width in σ_w/C units (10/50 = 0.2).
+        n_bins = 50
+        ax.hist(ev_valid, bins=n_bins, density=True, alpha=0.55,
+                color='C0', edgecolor='white', linewidth=0.3,
+                label=f'μ = {ev_mean:.5f}  (bias)\nσ = {sw_C:.5f}')
 
-        x_span = 0.04
+        # Strict model-implied noise distribution: N(0, (σ_w/C)²).
+        # Center is fixed at 0 (the SDE assumes zero-mean innovations) NOT
+        # at the empirical mean, so any fit bias shows as the histogram
+        # sitting visibly off the curve rather than being re-centered onto it.
+        x_span = 5.0 * sw_C
         x_gauss = np.linspace(-x_span, x_span, 300)
-        y_gauss = (1.0 / (nu_std * np.sqrt(2 * np.pi))) * \
-                  np.exp(-0.5 * ((x_gauss - nu_mean) / nu_std) ** 2)
+        y_gauss = (1.0 / (sw_C * np.sqrt(2 * np.pi))) * \
+                  np.exp(-0.5 * (x_gauss / sw_C) ** 2)
         ax.plot(x_gauss, y_gauss, 'C3-', lw=2.0, alpha=0.85,
-                label='Gaussian fit')
+                label=r'model $(\sigma_w/C)\cdot\mathcal{N}(0,1)$')
 
         ax.axvline(0, color='k', lw=0.5, alpha=0.5)
         ax.set_xlim(-x_span, x_span)
 
-    ax.set_xlabel(r'$\nu_k$ [°C/s]')
+    ax.set_xlabel(r'$\nu_k\sqrt{\Delta t_k}$  [$°C\,s^{-1/2}$]')
     ax.set_ylabel('Density')
     ax.set_title('System Noise Density', fontweight='bold')
     ax.legend(fontsize=8, loc='upper right'); ax.grid(True, alpha=0.3)
+
+    # ── 3b. Q–Q diagnostic INSET (top-left of the histogram, clear of the
+    # upper-right legend). Standardise residuals by the model σ_w/C so the
+    # reference is the y = x line of a perfect N(0,(σ_w/C)²) — NOT a
+    # least-squares fitted line. Heavy tails (leptokurtosis) peel off y = x.
+    if len(ev_valid) > 10:
+        from scipy.stats import norm as _norm
+        from matplotlib.lines import Line2D
+        axq = ax.inset_axes([0.015, 0.55, 0.40, 0.42])
+        z = np.sort(ev_valid) / sw_C
+        m = len(z)
+        theo = _norm.ppf((np.arange(1, m + 1) - 0.5) / m)
+        axq.scatter(theo, z, s=3, alpha=0.30, color='C0',
+                    edgecolors='none', rasterized=True)
+        axq.plot([-5, 5], [-5, 5], 'C3-', lw=1.5, alpha=0.9)
+        n_clip = int(np.sum(np.abs(z) > 5.0))
+        if n_clip > 0:
+            axq.legend(handles=[Line2D([], [], linestyle='none',
+                                       label=f'{n_clip} pts |z|>5')],
+                       loc='lower right', fontsize=6, handlelength=0,
+                       handletextpad=0.0, borderpad=0.3, framealpha=0.85)
+        axq.set_xlabel('theoretical q', fontsize=7, labelpad=1)
+        axq.set_ylabel(r'resid / $(\sigma_w/C)$', fontsize=7, labelpad=1)
+        # Fixed ±5 window: theoretical quantiles only span ~±3.7 for n≈5k,
+        # so this resolves the bulk and the onset of tail fan-out. Extreme
+        # leptokurtic points (|z|>5) fall outside — their count is shown in
+        # the legend; tail severity (γ₂) is reported under Fit quality.
+        axq.set_xlim(-5, 5); axq.set_ylim(-5, 5)
+        axq.set_aspect('equal')
+        axq.tick_params(labelsize=6, length=2, pad=1)
+        axq.grid(True, alpha=0.25)
+        axq.patch.set_alpha(0.92)
 
     # ── 4. Model equations ──
     ax = ax_eqns
@@ -873,7 +1007,15 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
     ax.axis('off')
     ax.set_xlim(0, 1); ax.set_ylim(0, 1)
 
-    se = fit.get("se", [float('nan')] * 4)
+    # Prefer the whiteness-robust (Newey-West HAC) covariance for ALL
+    # displayed uncertainty — text block, derived-quantity error bars, and
+    # the corner panel — falling back to naive only if HAC is degenerate.
+    _se_h = fit.get("se_hac")
+    _co_h = fit.get("corr_hac")
+    _use_hac = (_se_h is not None and _co_h is not None
+                and np.all(np.isfinite(_se_h)) and np.all(np.asarray(_se_h) > 0)
+                and np.all(np.isfinite(_co_h)))
+    se = list(_se_h) if _use_hac else fit.get("se", [float('nan')] * 4)
     # se order: [Rt_on, Rt_off, P0, C_eq]
     tau = fit["tau_on"]
     Ic = result["I_continuous_mult"]
@@ -884,7 +1026,7 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
     # 4×4 parameter covariance matrix (from the Levenberg-Marquardt fit)
     # and J is the Jacobian of the derived quantity w.r.t. the 4
     # parameters. Parameter order: [Rt_on, Rt_off, P0, C_eq].
-    corr = np.asarray(fit.get("corr", np.eye(4)))
+    corr = np.asarray(_co_h if _use_hac else fit.get("corr", np.eye(4)))
     se_arr = np.asarray(se)
     cov = np.outer(se_arr, se_arr) * corr  # Σ = diag(se) · corr · diag(se)
 
@@ -910,18 +1052,29 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
             J_Ic = np.array([dIc_dRt, 0.0, dIc_dP0, 0.0])
             se_Ic = float(np.sqrt(J_Ic @ cov @ J_Ic))
 
+    # Excess kurtosis γ₂ of the equal-variance residuals (Gaussianity /
+    # fit-adequacy metric: 0 ⇒ Gaussian, >0 ⇒ heavy-tailed misspecification).
+    if len(ev_valid) > 10:
+        gamma2 = float(((ev_valid - ev_valid.mean())**4).mean()
+                       / np.std(ev_valid)**4 - 3.0)
+    else:
+        gamma2 = float("nan")
+
     params = [
-        (0.93, r'$\bf{Fitted\ parameters}$', 12),
-        (0.84, rf'$R_{{t,on}} = {fit["Rt_on"]:.5f} \pm {se[0]:.5f}\ \ '
+        (0.94, r'$\bf{Fitted\ parameters}$', 12),
+        (0.86, rf'$R_{{t,on}} = {fit["Rt_on"]:.5f} \pm {se[0]:.5f}\ \ '
                rf'[°C/W]$', 11),
-        (0.75, rf'$R_{{t,off}} = {fit["Rt_off"]:.5f} \pm {se[1]:.5f}\ \ '
+        (0.78, rf'$R_{{t,off}} = {fit["Rt_off"]:.5f} \pm {se[1]:.5f}\ \ '
                rf'[°C/W]$', 11),
-        (0.66, rf'$P_0 = {fit["P0"]:.1f} \pm {se[2]:.1f}\ \ '
+        (0.70, rf'$P_0 = {fit["P0"]:.1f} \pm {se[2]:.1f}\ \ '
                rf'[W]$', 11),
-        (0.57, rf'$C_{{eq}} = {fit["C_eq"]:.0f} \pm {se[3]:.0f}\ \ '
+        (0.62, rf'$C = {fit["C"]:.0f} \pm {se[3]:.0f}\ \ '
                rf'[J/°C]$', 11),
-        (0.46, r'$\bf{Derived\ quantities}$', 12),
-        (0.37, rf'$\tau_{{on}} = R_{{t,on}} \times C_{{eq}}'
+        (0.54, rf'$\sigma_w = {fit["sigma_w_phys"]:.0f} \pm '
+               rf'{fit["se_sigma_w_phys"]:.0f}\ \ [\mathrm{{W\,s^{{1/2}}}}]$',
+               11),
+        (0.44, r'$\bf{Derived\ quantities}$', 12),
+        (0.36, rf'$\tau_{{on}} = R_{{t,on}} \times C'
                rf' = {tau/60:.1f} \pm {se_tau/60:.1f}\ \mathrm{{min}}$', 11),
         (0.28, rf'$I_{{cont}} = {Ic:.3f} \pm {se_Ic:.3f}\ \times I_e'
                rf' = {Ic * I_RATED:.1f} \pm {se_Ic * I_RATED:.1f}'
@@ -930,32 +1083,22 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
                else (rf'$I_{{cont}} = {Ic:.3f} \times I_e'
                      rf' = {Ic * I_RATED:.1f}\ \mathrm{{A}}$'
                      if Ic else r'$I_{cont}:\ \mathrm{not\ computed}$'), 11),
-        (0.17, r'$\bf{Fit\ quality}$', 12),
-        (0.08, rf'$RMSE = {fit["rmse"]:.3f}°C \qquad'
+        (0.18, r'$\bf{Fit\ quality}$', 12),
+        (0.10, rf'$RMSE = {fit["rmse"]:.3f}°C \qquad'
                rf' R^2 = {r2:.4f} \qquad'
-               rf' \sigma(T_w) = {sigma_Tw:.2f}°C$', 10),
+               rf' \gamma_2 = {gamma2:.1f}$', 10),
     ]
     for y, txt, fs in params:
         ax.text(0.05, y, txt, transform=ax.transAxes, fontsize=fs,
                 va='center', ha='left', family='serif')
 
-    ax.text(0.05, 0.00,
-            rf'$\sigma_w = {diag["sigma_w"]:.5f}\ \pm \sim 1\%\ \ '
-            rf'[°C/s] \qquad '
-            rf'corr(\nu, I) = {diag["corr_I"]:+.3f}$',
-            transform=ax.transAxes, fontsize=11, va='center', ha='left',
-            family='serif', color='black')
-    ax.text(0.05, -0.05, rf'$N_{{eff}} = {fit["n_eff"]}'
-            rf'\qquad N = {N}$',
-            transform=ax.transAxes, fontsize=11, va='center', ha='left',
-            family='serif', color='black')
     ax.set_title('Model Parameters', fontweight='bold')
 
     # ── 5. Winding temperature time series ──
     ax = ax_ts
     ax.plot(t_hrs[mv], Tw[mv], 'C3', lw=0.5, alpha=0.8, label='Measured')
     ax.plot(t_hrs[mv], Tw_pred[mv], 'C0', lw=0.5, alpha=0.8,
-            label=f"Model (RMSE={fit['rmse']:.2f}°C)")
+            label="Model")
     ax.fill_between(t_hrs, Tw[mv].min()-5, Tw[mv].max()+5,
                     where=~data["gen_on"], alpha=0.10, color='C2', label='Off')
 
@@ -980,11 +1123,11 @@ def plot_summary(result, label="turbine", out_path=None, title=None):
     ax_corner[0][1].set_title('Parameter Distribution',
                               fontweight='bold', fontsize=10)
     _corner_params = np.array([fit["Rt_on"], fit["P0"], fit["C_eq"]])
-    _corner_se = np.array([fit["se"][0], fit["se"][2], fit["se"][3]])
-    _corner_corr_full = np.array(fit["corr"])
+    _corner_se = np.array([se[0], se[2], se[3]])
+    _corner_corr_full = np.asarray(corr)
     _corner_idx = [0, 2, 3]
     _corner_corr = _corner_corr_full[np.ix_(_corner_idx, _corner_idx)]
-    _corner_labels = [r'$R_{t,on}$', r'$P_0$', r'$C_{eq}$']
+    _corner_labels = [r'$R_{t,on}$', r'$P_0$', r'$C$']
     _corner_units = ['K/W', 'W', 'J/K']
 
     def _fmt_val(v, idx):
@@ -1310,7 +1453,7 @@ def plot_equations_page(out_path=None):
                 r'\frac{\partial f}{\partial x_j}\,\Sigma_{ij}'
                 r'\qquad \Sigma = \mathrm{diag}(\sigma)\cdot'
                 r'\mathrm{corr}\cdot\mathrm{diag}(\sigma)$', 11),
-        (-0.23, r'$J_{\tau_{on}} = [C_{eq},\,0,\,0,\,R_{t,on}]'
+        (-0.23, r'$J_{\tau_{on}} = [C,\,0,\,0,\,R_{t,on}]'
                 r'\qquad J_{I_{cont}} = ['
                 r'\partial I_{cont}/\partial R_{t,on},\,0,\,'
                 r'\partial I_{cont}/\partial P_0,\,0]$', 11),
