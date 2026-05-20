@@ -104,7 +104,7 @@ per machine by nonlinear least squares on $\nu_k \sqrt{\Delta t_k}$, giving flee
 - $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4% (all machines), ~1% (per machine)
 - $P_0 = 331$ W $\pm$ 18% (all machines), ~6% (per machine)
 - $C_{eq} = 43939$ J/K $\pm$ 24% (all machines), ~2% (per machine)
-- $\sigma_w = 1963$ W·s$^{1/2}$ $\pm$ 24% (all machines), ~3% (per machine)
+- $\sigma_w = 1963$ W·$sqrt{s}$ $\pm$ 24% (all machines), ~3% (per machine)
 - Fleet-average RMSE = 3.45 °C
 
 ### Machine reactance from ABB Type Test (Form 4 derivation)
