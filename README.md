@@ -104,6 +104,7 @@ per machine by nonlinear least squares on $\nu_k \sqrt{\Delta t_k}$, giving flee
 - $R_{t,\mathrm{on}} = 0.0484$ °C/W $\pm$ 4% (all machines), ~1% (per machine)
 - $P_0 = 331$ W $\pm$ 18% (all machines), ~6% (per machine)
 - $C_{eq} = 43939$ J/K $\pm$ 24% (all machines), ~2% (per machine)
+- $\sigma_w = 1963$ W·s$^{1/2}$ $\pm$ 24% (all machines), ~3% (per machine)
 - Fleet-average RMSE = 3.45 °C
 
 ### Machine reactance from ABB Type Test (Form 4 derivation)
@@ -341,12 +342,17 @@ Pipeline outputs:
 | $R_{t,\mathrm{off}}$ | $0.105\ \mathrm{K/W}$&hairsp;† | 30%&hairsp;† | ~5–40%&hairsp;† |
 | $P_0$ | $331\ \mathrm{W}$ | 18% | ~6% |
 | $C_{eq}$ | $43{,}939\ \mathrm{J/K}$ | 24% | ~2% |
+| $\sigma_w$ | $1{,}963\ \mathrm{W\,s^{1/2}}$ | 24% | ~3%&hairsp;‡ |
 | $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% | — |
 | RMSE | $3.45\ \mathrm{°C}$ | — | — |
 
 † $R_{t,\mathrm{off}}$ excludes T2, T3 and T4 (bound-saturated fits); full-fleet
 CV is 81%. Per-machine SE ranges from ~4% (well-constrained) to >100%
 (bound-saturated).
+
+‡ $\sigma_w$ per-machine SE is autocorrelation-robust (Newey–West HAC on
+squared residuals). Median 2.6%, range 1.3–6% across the fleet, with T7
+an outlier at ~14% due to its short generating window.
 
 **ABB datasheet constants:**
 
