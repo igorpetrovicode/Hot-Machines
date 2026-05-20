@@ -341,7 +341,7 @@ Pipeline outputs:
 | $R_{t,\mathrm{on}}$ | $0.0484\ \mathrm{K/W}$ | 4% | ~1% |
 | $R_{t,\mathrm{off}}$ | $0.105\ \mathrm{K/W}$&hairsp;† | 30%&hairsp;† | ~5–40%&hairsp;† |
 | $P_0$ | $331\ \mathrm{W}$ | 18% | ~6% |
-| $C_{eq}$ | $43{,}939\ \mathrm{J/K}$ | 24% | ~2% |
+| $C$ | $43{,}939\ \mathrm{J/K}$ | 24% | ~2% |
 | $\sigma_w$ | $1{,}963\ \mathrm{W·\sqrt{s}}$ | 24% | ~3%&hairsp;‡ |
 | $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% | ~5%&hairsp;‡ |
 | RMSE | $3.45\ \mathrm{°C}$ | — | — |
