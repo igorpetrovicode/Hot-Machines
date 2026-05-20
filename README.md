@@ -343,7 +343,7 @@ Pipeline outputs:
 | $P_0$ | $331\ \mathrm{W}$ | 18% | ~6% |
 | $C_{eq}$ | $43{,}939\ \mathrm{J/K}$ | 24% | ~2% |
 | $\sigma_w$ | $1{,}963\ \mathrm{W·\sqrt{s}}$ | 24% | ~3%&hairsp;‡ |
-| $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% | — |
+| $\tau_\mathrm{on}$ | $35.5\ \mathrm{min}$ | 26% | ~5%&hairsp;‡ |
 | RMSE | $3.45\ \mathrm{°C}$ | — | — |
 
 † $R_{t,\mathrm{off}}$ excludes T2, T3 and T4 (bound-saturated fits); full-fleet
